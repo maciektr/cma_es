@@ -28,6 +28,7 @@ defmodule CmaEs do
     :p_C,
     :p_sigma,
     :population_size,
+    :mueff,
     :prev_D,
     :prev_sigma,
     :shape,
@@ -39,7 +40,8 @@ defmodule CmaEs do
     initialized: false
   ]
 
-  @max_generation 1000
+  # @max_generation 1000
+  @max_generation 30
   @termination_no_effect 1.0e-8
 
   def validate(cma) do
@@ -67,25 +69,25 @@ defmodule CmaEs do
       cma
       |> Map.put(:dimension, Nx.shape(cma.initial_solution) |> elem(0))
 
-    n = Nx.tensor(cma.dimension, type: {:f, 32})
+    n = Nx.tensor(cma.dimension, type: {:s, 32})
 
     lambda =
       case cma.population_size do
         nil -> Nx.floor(Nx.multiply(Nx.log(n), 3) |> Nx.add(8))
-        value -> Nx.tensor(value)
+        value -> Nx.tensor(value, type: {:s, 32})
       end
 
     cma = %{
       cma
       | N: n,
         lambda: lambda,
-        shape: Nx.stack([lambda, n]),
+        shape: Nx.stack([lambda, n]) |> Nx.as_type({:s, 32}),
         mu: Nx.floor(Nx.divide(lambda, 2)),
         generation: 0,
         initialized: true
     }
 
-    r_heigh = (cma.mu |> Nx.to_flat_list() |> Enum.at(0) |> trunc()) + 1
+    r_heigh = cma.mu |> Nx.to_flat_list() |> Enum.at(0) |> trunc()
     range = 1..r_heigh |> Enum.to_list()
 
     a = Nx.log(Nx.add(cma.mu, 0.5)) |> Nx.subtract(Nx.log(Nx.tensor(range)))
@@ -211,21 +213,39 @@ defmodule CmaEs do
         p_sigma: p_sigma,
         p_C: p_C,
         B: b,
-        D: d
+        D: d,
+        mueff: mueff
     }
   end
 
   def step(cma) do
     # 1 Sample a new population
-    z = Nx.random_normal(cma.shape)
-    y = Nx.dot(z, Nx.dot(Map.get(cma, :B), Map.get(cma, :D)))
+    # z = Nx.random_normal(cma.shape)
+    # key = Nx.Random.key(42)
+    # {z, key} = Nx.Random.normal(key, 0, 1, shape: cma.shape |> Nx.to_flat_list() |> List.to_tuple(), type: :f32)
+    shape = cma.shape |> Nx.to_flat_list() |> List.to_tuple()
+    z = Nx.random_normal(shape)
+    # cma.shape |> IO.puts(Nx.shape(z), z)
+    # tmp = Nx.dot(Map.get(cma, :B), Map.get(cma, :D))
+    tmp = Nx.multiply(Map.get(cma, :B), Map.get(cma, :D))
+    y = Nx.multiply(z, tmp)
     x = Nx.add(Map.get(cma, :m), Nx.multiply(Map.get(cma, :sigma), y))
 
     penalty = 0
 
     # 2 Selection and Recombination: Moving the Mean
-    f_x = cma.fitness_fn.(x) + penalty
-    x_sorted = Nx.gather(x, Nx.argsort(f_x))
+    f_x = cma.fitness_function.(x) |> Nx.add(penalty)
+    tmp = Nx.argsort(f_x)
+
+    tmp_dim = Nx.shape(tmp) |> elem(0)
+    # IO.puts({:arg, x, tmp})
+
+    tmp = tmp |> Nx.reshape({tmp_dim, 1})
+    tmp_zeros = Nx.tensor(for _ <- 1..tmp_dim, do: 0)
+    tmp = Nx.stack([tmp, tmp_zeros], axis: 1)
+
+    x_sorted = Nx.gather(x, tmp)
+    x_sorted = Nx.new_axis(x_sorted, 1)
     # The new mean is a weighted average of the top-μ solutions
     x_diff = Nx.subtract(x_sorted, Map.get(cma, :m))
     x_mean = Nx.sum(Nx.multiply(x_diff, Map.get(cma, :weights)), axes: [0])
@@ -236,102 +256,157 @@ defmodule CmaEs do
     y_mean = Nx.divide(x_mean, Map.get(cma, :sigma))
 
     p_C =
-      Nx.add(
-        Nx.multiply(Nx.subtract(1, Map.get(cma, :cc)), Map.get(cma, :p_C)),
-        Nx.multiply(
-          Nx.sqrt(
-            Nx.multiply(
-              Nx.multiply(Map.get(cma, :cc), Nx.subtract(2, Map.get(cma, :cc))),
-              Map.get(cma, :μeff)
-            )
-          ),
-          y_mean
-        )
+      Nx.subtract(1, Map.get(cma, :cc))
+      |> Nx.multiply(Map.get(cma, :p_C))
+      |> Nx.add(
+        Map.get(cma, :cc)
+        |> Nx.multiply(Nx.subtract(2, Map.get(cma, :cc)))
+        |> Nx.multiply(Map.get(cma, :mueff))
+        |> Nx.sqrt()
+        |> Nx.multiply(y_mean)
       )
 
-    p_C_matrix = Nx.expand_dims(p_C, axis: 1)
+    # p_C_matrix = Nx.expand_dims(p_C, axis: 1)
+    p_C_matrix = Nx.new_axis(p_C, Nx.shape(p_C) |> tuple_size())
 
     # # Compute Rank-μ-Update
-    C_m =
-      Nx.map(Nx.expand_dims(Nx.divide(x_diff, Map.get(cma, :sigma)), axis: 1), fn e ->
+    tmp = Nx.divide(x_diff, Map.get(cma, :sigma))
+
+    to_map = Nx.new_axis(tmp, Nx.shape(tmp) |> tuple_size())
+
+    c_m =
+      Nx.map(to_map, fn e ->
         Nx.dot(e, Nx.transpose(e))
       end)
 
-    y_s = Nx.sum(Nx.multiply(C_m, Nx.expand_dims(Map.get(cma, :weights), axis: 1)), axes: [0])
+    tmp = Map.get(cma, :weights)
 
-    # # Combine Rank-one-Update and Rank-μ-Update
-    C =
-      Nx.add(
-        Nx.add(
-          Nx.multiply(
-            Nx.subtract(Nx.subtract(1, Map.get(cma, :c1)), Map.get(cma, :cmu)),
-            Map.get(cma, :C)
-          ),
-          Nx.multiply(Map.get(cma, :c1), Nx.dot(p_C_matrix, Nx.transpose(p_C_matrix)))
+    y_s =
+      Nx.sum(
+        Nx.multiply(
+          c_m,
+          # Nx.expand_dims(Map.get(cma, :weights), axis: 1)
+          Nx.new_axis(tmp, Nx.shape(tmp) |> tuple_size())
         ),
-        Nx.multiply(Map.get(cma, :cmu), y_s)
+        axes: [0]
       )
 
+    # # Combine Rank-one-Update and Rank-μ-Update
+
+    c =
+      Nx.subtract(1, Map.get(cma, :c1))
+      |> Nx.subtract(Map.get(cma, :cmu))
+      |> Nx.multiply(Map.get(cma, :C))
+      |> Nx.add(Nx.multiply(Map.get(cma, :c1), Nx.dot(p_C_matrix, Nx.transpose(p_C_matrix))))
+      |> Nx.add(Nx.multiply(Map.get(cma, :cmu), y_s))
+
     # # Enforce symmetry of the covariance matrix
-    C_upper = Nx.band_part(C, 0, -1)
-    C_upper_no_diag = Nx.subtract(C_upper, Nx.diag_part(C_upper))
-    C = Nx.add(C_upper, Nx.transpose(C_upper_no_diag))
+    # c_upper = Nx.band_part(c, 0, -1)
+    {tx, ty} = Nx.shape(c)
+    # ind = for r <- 0..tx-1, k <- 0..ty-1 do
+    #     if k >= r do
+    #       [r, k]
+    #     end
+    # end |> Enum.filter(& !is_nil(&1))
+    # c_upper = Nx.tensor(ind)
+    # c_upper = Nx.gather(c, Nx.tensor(ind))
+    c_upper = c
+    # for r <- 0..tx-1 do
+    #   c_upper = Nx.put_slice(c_upper, [r,0], Nx.tensor(for _ <- 0..r, do: 0))
+    # end
+
+    c_upper =
+      Enum.reduce(0..(tx - 1), c_upper, fn r, acc ->
+        if r == 0 do
+          acc
+        else
+          Nx.put_slice(acc, [r, 0], Nx.tensor([for(_ <- 0..(r - 1), do: 0)]))
+        end
+      end)
+
+    # c_upper_no_diag = Nx.subtract(c_upper, Nx.diag_part(c_upper))
+    c_upper_no_diag = Nx.subtract(c_upper, Nx.take_diagonal(c_upper))
+    c = Nx.add(c_upper, Nx.transpose(c_upper_no_diag))
 
     # 4 Step-size control
     # #Update evolution path for sigma
-    D_inv = Nx.diag_part(Map.get(cma, :D))
-    C_inv_squared = Nx.dot(Nx.dot(Map.get(cma, :B), D_inv), Nx.transpose(Map.get(cma, :B)))
-    C_inv_squared_y = Nx.squeeze(Nx.dot(C_inv_squared, Nx.expand_dims(y_mean, axis: 1)))
+    # d_inv = Nx.diag_part(Map.get(cma, :D))
+    d_inv = Nx.take_diagonal(Map.get(cma, :D))
+    c_inv_squared = Nx.dot(Nx.dot(Map.get(cma, :B), d_inv), Nx.transpose(Map.get(cma, :B)))
+    y_mean_expanded = Nx.new_axis(y_mean, Nx.shape(y_mean) |> tuple_size())
+    # c_inv_squared_y = Nx.squeeze(Nx.dot(c_inv_squared, y_mean_expanded      ))
+    c_inv_squared_y = Nx.squeeze(Nx.dot(y_mean_expanded, c_inv_squared))
 
     p_sigma =
       Nx.add(
-        Nx.multiply(Nx.subtract(1, Map.get(cma, :cs)), Map.get(cma, :p_sigma)),
+        Nx.multiply(Nx.subtract(1, Map.get(cma, :csigma)), Map.get(cma, :p_sigma)),
         Nx.multiply(
           Nx.sqrt(
             Nx.multiply(
-              Nx.multiply(Map.get(cma, :cs), Nx.subtract(2, Map.get(cma, :cs))),
-              Map.get(cma, :μeff)
+              Nx.multiply(Map.get(cma, :csigma), Nx.subtract(2, Map.get(cma, :csigma))),
+              Map.get(cma, :mueff)
             )
           ),
-          C_inv_squared_y
+          c_inv_squared_y
         )
       )
 
+    #   IO.inspect({:chin, Map.get(cma, :chiN), p_sigma})
+    #   IO.inspect({:lin, Nx.LinAlg.norm(p_sigma)})
+    #   IO.inspect(
+    # Nx.divide(Nx.LinAlg.norm(p_sigma), Map.get(cma, :chiN))
+    # )
+    #       Nx.multiply(
+    #         Nx.divide(Map.get(cma, :csigma), Map.get(cma, :damps)),
+    #         Nx.subtract(Nx.divide(Nx.LinAlg.norm(p_sigma), Map.get(cma, :chiN)), 1)
+    #       )
+    # )
     # # Update sigma
     sigma =
-      Map.get(cma, :sigma) *
+      Map.get(cma, :sigma)
+      |> Nx.multiply(
         Nx.exp(
-          Nx.divide(
-            Nx.multiply(
-              Nx.divide(Map.get(cma, :cs), Map.get(cma, :damps)),
-              Nx.subtract(Nx.divide(Nx.norm(p_sigma), Map.get(cma, :chiN)), 1)
-            )
+          Nx.multiply(
+            Nx.divide(Map.get(cma, :csigma), Map.get(cma, :damps)),
+            Nx.subtract(Nx.divide(Nx.LinAlg.norm(p_sigma), Map.get(cma, :chiN)), 1)
           )
         )
+      )
+
+    # IO.inspect({:sigm, sigma, Map.get(cma, :sigma)})
 
     # 5 Update B and D: eigen decomposition
-    {u, B, _} = Nx.LinAlg.svd(C)
+    {u, b, _} = Nx.LinAlg.svd(c)
 
     # diag_D = tf.sqrt(u)
-    diag_D = Nx.sqrt(u)
-    D = Nx.diag_part(diag_D)
+    diag_D =
+      Nx.map(u, fn e ->
+        Nx.sqrt(Nx.max(e, Nx.tensor(0.0)))
+      end)
+
+    # diag_D = Nx.sqrt(u)
+    # d = Nx.diag_part(diag_D)
+    # d = Nx.take_diagonal(diag_D)
+    # IO.puts(diag_D)
+    d = Nx.broadcast(0, Nx.shape(u)) |> Nx.put_diagonal(diag_D |> Nx.flatten())
 
     # 6 Assign new variable values
     cma = %CmaEs{
       cma
       | generation: cma.generation + 1,
-        prev_sigma: Nx.tensor(cma.sigma),
-        prev_D: Nx.tensor(Map.get(cma, :D)),
+        prev_sigma: cma.sigma,
+        prev_D: Map.get(cma, :D),
         diag_D: diag_D,
         p_C: p_C,
         p_sigma: p_sigma,
-        C: C,
+        C: c,
         sigma: sigma,
-        B: B,
-        D: D,
+        B: b |> Nx.new_axis(1),
+        D: d,
         m: m
     }
 
+    IO.inspect({cma.generation, m})
     {:ok, cma}
   end
 
@@ -349,5 +424,10 @@ defmodule CmaEs do
   @spec search(CmaEs) :: {:ok, CmaEs}
   def search(cma) do
     search(cma, @max_generation)
+  end
+
+  # return self.fitness_fn(tf.stack([self.m])).numpy()[0]
+  def best_fitness(cma) do
+    cma.fitness_function.(cma.m |> Nx.new_axis(1))
   end
 end

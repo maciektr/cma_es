@@ -3,7 +3,7 @@ defmodule CmaEsTest do
   doctest CmaEs
 
   test "test one dim" do
-    fitness_fn = fn x -> x[[.., 0]] ** 2 end
+    fitness_fn = fn x -> x[[.., 0]] |> Nx.power(2) end
 
     cma =
       %CmaEs{
@@ -13,8 +13,16 @@ defmodule CmaEsTest do
       }
       |> CmaEs.init()
 
-    cma = CmaEs.search(cma)
+    {:ok, cma} = CmaEs.search(cma)
 
-    cma |> IO.puts()
+    IO.inspect({:CMA, cma})
+
+    m = cma.m |> IO.inspect() |> Nx.to_flat_list() |> Enum.at(0)
+    assert m < 1.0
+    assert m > -1.0
+
+    best_fn = CmaEs.best_fitness(cma) |> IO.inspect() |> Nx.to_flat_list() |> Enum.at(0)
+    assert best_fn < 1.0
+    assert best_fn > -1.0
   end
 end
