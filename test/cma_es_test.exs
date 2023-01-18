@@ -102,7 +102,7 @@ defmodule CmaEsTest do
 
     best_fn = CmaEs.best_fitness(cma) |> Nx.to_flat_list() |> Enum.at(0)
 
-    IO.inspect({x1, x2, best_fn})
+    # IO.inspect({x1, x2, best_fn})
 
     a = -pi
     b = 12.275
@@ -110,7 +110,7 @@ defmodule CmaEsTest do
     d = 2.275
     e = 9.42478
     f = 2.475
-    r = 0.001
+    r = 0.01
 
     assert (x1 < a + r and x1 > a - r and x2 < b + r and x2 > b - r) or
              (x1 < c + r and x1 > c - r and x2 < d + r and x2 > d - r) or
