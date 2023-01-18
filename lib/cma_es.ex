@@ -3,7 +3,7 @@ defmodule CmaEs do
   Documentation for `CmaEs`.
   """
 
-  import Nx.Defn
+  # import Nx.Defn
 
   defstruct [
     :B,
@@ -41,7 +41,7 @@ defmodule CmaEs do
   ]
 
   # @max_generation 1000
-  @max_generation 30
+  @max_generation 100
   @termination_no_effect 1.0e-8
 
   def validate(cma) do
@@ -302,7 +302,7 @@ defmodule CmaEs do
 
     # # Enforce symmetry of the covariance matrix
     # c_upper = Nx.band_part(c, 0, -1)
-    {tx, ty} = Nx.shape(c)
+    {tx, _ty} = Nx.shape(c)
     # ind = for r <- 0..tx-1, k <- 0..ty-1 do
     #     if k >= r do
     #       [r, k]
@@ -416,14 +416,86 @@ defmodule CmaEs do
 
   def search(cma, steps) do
     case cma |> step do
-      {:ok, next_cma} -> search(next_cma, steps - 1)
-      _ -> {:ok, cma}
+      {:ok, next_cma} ->
+        do_term = should_terminate(next_cma)
+
+        if do_term do
+          IO.inspect({:returning_early, cma.generation, do_term})
+          {:ok, next_cma}
+        else
+          search(next_cma, steps - 1)
+        end
+
+      _ ->
+        {:ok, cma}
     end
   end
 
   @spec search(CmaEs) :: {:ok, CmaEs}
   def search(cma) do
     search(cma, @max_generation)
+  end
+
+  def should_terminate(cma) do
+    # NoEffectAxis: stop if adding a 0.1-standard deviation vector in any principal axis
+    # direction of C does not change m
+    i = cma.generation |> rem(cma.dimension)
+
+    # m_nea = self.m + 0.1 * self.σ * tf.squeeze(self._diag_D[i] * self.B[i,:])
+    m_nea =
+      cma.sigma
+      |> Nx.multiply(0.1)
+      |> Nx.multiply(Nx.squeeze(cma.diag_D[i] |> Nx.multiply(Map.get(cma, :B)[[i, ..]])))
+      |> Nx.add(cma.m)
+
+    # m_nea_diff = tf.abs(self.m - m_nea)
+    m_nea_diff = Nx.abs(cma.m |> Nx.subtract(m_nea))
+    # no_effect_axis = tf.reduce_all(tf.less(m_nea_diff, self.termination_no_effect))
+    no_effect_axis =
+      Nx.any(Nx.less(m_nea_diff, @termination_no_effect)) |> Nx.to_flat_list() |> List.first() > 0
+
+    # NoEffectCoord: stop if adding 0.2 stdev in any single coordinate does not change m
+    # m_nec = self.m + 0.2 * self.σ * tf.linalg.diag_part(self.C)
+    m_nec =
+      0.2
+      |> Nx.multiply(cma.sigma)
+      |> Nx.multiply(Nx.take_diagonal(Map.get(cma, :C)))
+      |> Nx.add(cma.m)
+
+    # m_nec_diff = tf.abs(self.m - m_nec)
+    m_nec_diff = Nx.abs(cma.m |> Nx.subtract(m_nec))
+    # no_effect_coord = tf.reduce_any(tf.less(m_nec_diff, self.termination_no_effect))
+    no_effect_coord =
+      Nx.any(Nx.less(m_nec_diff, @termination_no_effect)) |> Nx.to_flat_list() |> List.first() > 0
+
+    # ConditionCov: stop if the condition number of the covariance matrix becomes too large
+    # max_D = tf.reduce_max(self._diag_D)
+    max_D = Nx.reduce_max(cma.diag_D)
+    # min_D = tf.reduce_min(self._diag_D)
+    min_D = Nx.reduce_min(cma.diag_D)
+    # condition_number = max_D**2 / min_D**2
+    condition_number = Nx.divide(Nx.power(max_D, 2), Nx.power(min_D, 2))
+    # condition_cov = tf.greater(condition_number, 1e14)
+    condition_cov =
+      Nx.greater(condition_number, 100_000_000_000_000) |> Nx.to_flat_list() |> List.first() > 0
+
+    # TolXUp: stop if σ × max(D) increased by more than 10^4.
+    # This usually indicates a far too small initial σ, or divergent behavior.
+    # prev_max_D = tf.reduce_max(tf.linalg.diag_part(self._prev_D))
+    prev_max_D = Nx.reduce_max(Nx.take_diagonal(cma.prev_D))
+    # tol_x_up_diff = tf.abs(self.σ * max_D - self._prev_sigma * prev_max_D)
+    tol_x_up_diff =
+      Nx.abs(
+        Nx.multiply(cma.sigma, max_D)
+        |> Nx.subtract(Nx.multiply(cma.prev_sigma, prev_max_D))
+      )
+
+    # tol_x_up = tf.greater(tol_x_up_diff, 1e4)
+    tol_x_up = Nx.greater(tol_x_up_diff, 10000) |> Nx.to_flat_list() |> List.first() > 0
+
+    # IO.inspect({no_effect_axis, no_effect_coord , condition_cov , tol_x_up})
+
+    no_effect_axis or no_effect_coord or condition_cov or tol_x_up
   end
 
   # return self.fitness_fn(tf.stack([self.m])).numpy()[0]
