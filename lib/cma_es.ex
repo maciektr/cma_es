@@ -406,7 +406,7 @@ defmodule CmaEs do
         m: m
     }
 
-    IO.inspect({cma.generation, m})
+    # IO.inspect({cma.generation, m})
     {:ok, cma}
   end
 

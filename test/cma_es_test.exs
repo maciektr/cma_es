@@ -15,14 +15,14 @@ defmodule CmaEsTest do
 
     {:ok, cma} = CmaEs.search(cma)
 
-    IO.inspect({:CMA, cma})
+    # IO.inspect({:CMA, cma})
 
-    m = cma.m |> IO.inspect() |> Nx.to_flat_list() |> Enum.at(0)
-    assert m < 1.0
-    assert m > -1.0
+    m = cma.m |> Nx.to_flat_list() |> Enum.at(0)
+    assert m < 0.001
+    assert m > -0.001
 
-    best_fn = CmaEs.best_fitness(cma) |> IO.inspect() |> Nx.to_flat_list() |> Enum.at(0)
-    assert best_fn < 1.0
-    assert best_fn > -1.0
+    best_fn = CmaEs.best_fitness(cma) |> Nx.to_flat_list() |> Enum.at(0)
+    assert best_fn < 0.001
+    assert best_fn > -0.001
   end
 end
