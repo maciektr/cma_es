@@ -100,7 +100,7 @@ defmodule CmaEsTest do
 
     [x1, x2] = cma.m |> Nx.to_flat_list()
 
-    best_fn = CmaEs.best_fitness(cma) |> Nx.to_flat_list() |> Enum.at(0)
+    _best_fn = CmaEs.best_fitness(cma) |> Nx.to_flat_list() |> Enum.at(0)
 
     # IO.inspect({x1, x2, best_fn})
 
