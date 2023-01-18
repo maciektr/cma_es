@@ -24,7 +24,7 @@ defmodule CmaEsTest do
     assert best_fn > -0.001
   end
 
-  test "test six_hump_camel" do
+  test "test six_hump_camel function" do
     # Six-Hump Camel Function
     # https://www.sfu.ca/~ssurjano/camel6.html
 
@@ -65,7 +65,7 @@ defmodule CmaEsTest do
     assert best_fn < -1.0316 + 0.001 and best_fn > -1.0316 - 0.001
   end
 
-  test "test branin func" do
+  test "test branin function" do
     pi = 3.141592653589793
 
     fitness_fn = fn x ->
