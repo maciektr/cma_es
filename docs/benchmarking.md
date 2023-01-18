@@ -11,11 +11,13 @@ Primitive, one dimensional function `f(x) = x ^ 2`.
 - Six hump camel function
 
 Visualization:
+
 ![](img/camel6.png)
 
 - Branin function
 
 Visualization:
+
 ![](img/branin.png)
 
 ## Compare implementations
