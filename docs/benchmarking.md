@@ -28,6 +28,8 @@ I am benchmarking my solution against the same algorithm implemented in tensorfl
 
 For the purpose of benchmarking I have used the hyperfine (https://github.com/sharkdp/hyperfine) tool, running tests asserting successful execution of the algorithm on test functions mentioned before. Tests for both implementations have been run 20 times.
 
+All test have been run on a personal computer equipped with Ryzen 7 2700X CPU and Nvidia GTX 1060 6GB GPU.
+
 ## Results
 
 Following results have been obtained.
