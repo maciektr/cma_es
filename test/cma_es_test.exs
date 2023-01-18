@@ -117,3 +117,6 @@ defmodule CmaEsTest do
              (x1 < e + r and x1 > e - r and x2 < f + r and x2 > f - r)
   end
 end
+
+# hyperfine -i -r 20 "mix test --seed=926458"
+# hyperfine -r 20 "python -m cma.core_test"
