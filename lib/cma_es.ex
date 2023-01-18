@@ -41,7 +41,7 @@ defmodule CmaEs do
   ]
 
   # @max_generation 1000
-  @max_generation 100
+  @max_generation 1000
   @termination_no_effect 1.0e-8
 
   def validate(cma) do
@@ -439,7 +439,7 @@ defmodule CmaEs do
         do_term = should_terminate(next_cma)
 
         if do_term do
-          IO.inspect({:returning_early, cma.generation, do_term})
+          # IO.inspect({:returning_early, cma.generation, do_term})
           {:ok, next_cma}
         else
           search(next_cma, steps - 1)
